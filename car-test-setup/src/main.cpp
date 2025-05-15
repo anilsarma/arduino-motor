@@ -98,150 +98,28 @@ long t0_direction = millis();
 long t0 = millis();
 double pid_integral = 0;
 
-void loop() {
 
+enum TestState {None,  RightForward, LeftForWard, RighBack, LeftBack, Complete };
+TestState testState = None;
+void loop() {
   long now = millis();
 
-  if( (now - t0_direction) > 3000) {
-     forward_direction = !forward_direction;
-     t0_direction = now;
-     targetAngle += 180;
-     if(targetAngle > 360) {
-      targetAngle = 0;
+  if( (now - t0_direction) > 5000) {
+     Serial.print("Current State:");Serial.println(testState);
+     switch (testState)
+     {
+        case None: testState = RightForward; leftSpeedVal = 0; rightSpeedVal = 200; forward(); driving(); Serial.println("RightForward");break;
+        case RightForward: testState = LeftForWard; leftSpeedVal = 200; rightSpeedVal = 0; forward(); driving(); Serial.println("LeftForWard");break;
+        case LeftForWard: testState = RighBack;leftSpeedVal = 0; rightSpeedVal = 200; backward(); driving(); Serial.println("RighBack");break;
+        case RighBack: testState = LeftBack;leftSpeedVal = 200; rightSpeedVal = 0; backward(); driving(); Serial.println("LeftBack");break;
+        case LeftBack: testState = None; leftSpeedVal = 0;stopCar();Serial.println("Complete");break;
+        
      }
-     pid_integral = 0; // start over.
-     stopCar();
-     Serial.print("switching direction: ");Serial.println(forward_direction);
-     delay(1000);
-     leftSpeedVal = 200;
-     rightSpeedVal = 200;
-  }
-  if(( now - t0) > 5000) {
-    //Serial.print("in loop ");
-    //wSerial.println(now);
-    t0 = now;
-
-    Serial.print(t0);
-    Serial.print(" angle: ");
-    Serial.print(angle);
-    Serial.print(", targetAngle: ");
-    Serial.print(targetAngle);
-    Serial.print(", GyroX: "); Serial.print(GyroX);
-    Serial.print(", roll/pitch/yaw: "); Serial.print(roll); Serial.print("/");Serial.print(pitch); Serial.print("/");Serial.print(yaw);
-    Serial.print(",  elapsedTime (in ms): "); //estimates time to run void loop() once
-    Serial.print(elapsedTime * pow(10, 3));
-    Serial.print(", equilibriumSpeed: ");
-    Serial.print(equilibriumSpeed);
-    Serial.print(", Left/Right ");Serial.print(leftSpeedVal); Serial.print("/");Serial.print(rightSpeedVal);
-    Serial.println("");
+     t0_direction = now;
   }
 
-  // === Read accelerometer (on the MPU6050) data === //
-  readAcceleration();
-  // Calculating Roll and Pitch from the accelerometer data
-  accAngleX = (atan(AccY / sqrt(pow(AccX, 2) + pow(AccZ, 2))) * 180 / PI) - AccErrorX; //AccErrorX is calculated in the calculateError() function
-  accAngleY = (atan(-1 * AccX / sqrt(pow(AccY, 2) + pow(AccZ, 2))) * 180 / PI) - AccErrorY;
+
   
-  // === Read gyroscope (on the MPU6050) data === //
-  previousTime = currentTime;
-  currentTime = micros();
-  elapsedTime = (currentTime - previousTime) / 1000000; // Divide by 1000 to get seconds
-  readGyro();
-  // Correct the outputs with the calculated error values
-  GyroX -= GyroErrorX; //GyroErrorX is calculated in the calculateError() function
-  GyroY -= GyroErrorY;
-  GyroZ -= GyroErrorZ;
-  // Currently the raw values are in degrees per seconds, deg/s, so we need to multiply by sendonds (s) to get the angle in degrees
-  gyroAngleX += GyroX * elapsedTime; // deg/s * s = deg
-  gyroAngleY += GyroY * elapsedTime;
-  yaw += GyroZ * elapsedTime;
-  //combine accelerometer- and gyro-estimated angle values. 0.96 and 0.04 values are determined through trial and error by other people
-  roll = 0.96 * gyroAngleX + 0.04 * accAngleX;
-  pitch = 0.96 * gyroAngleY + 0.04 * accAngleY;
-  // do a roll/pitch/yaw test.
-  angle = yaw; //if you mounted MPU6050 in a different orientation to me, angle may not = roll. It can roll, pitch, yaw or minus version of the three
-  //for me, turning right reduces angle. Turning left increases angle.
-#ifdef IR_SUPPORT
-    ir_loop();
-#endif
-  // Print the values on the serial monitor
-  if(Serial.available()){
-    char c = Serial.read ();
-    //c = 'w';
-    if (c == 'w') { //drive forward
-      Serial.println("forward");
-      isDriving = true;
-    } else if (c == 'a') { //turn left
-      Serial.println("left");
-      targetAngle += 90;
-      if (targetAngle > 180){
-        targetAngle -= 360;
-      }
-      isDriving = false;
-    } else if (c == 'd') { //turn right
-      Serial.println("right");
-      targetAngle -= 90;
-      if (targetAngle <= -180){
-        targetAngle += 360;
-      }
-      isDriving = false;
-    } else if (c == 'q') { //stop or brake
-      Serial.println("stop");
-      Serial.print(" isdriving ");Serial.println(isDriving);
-      isDriving = false;
-    } else if (c == 'i') { //print information. When car is stationary, GyroX should approx. = 0. 
-      Serial.print("angle: ");
-      Serial.println(angle);
-      Serial.print("targetAngle: ");
-      Serial.println(targetAngle);
-      Serial.print("GyroX: ");
-      Serial.println(GyroX);
-      Serial.print("elapsedTime (in ms): "); //estimates time to run void loop() once
-      Serial.println(elapsedTime * pow(10, 3));
-      Serial.print("equilibriumSpeed: ");
-      Serial.println(equilibriumSpeed);
-    } else if (c == 'p') { //pause the program
-      paused = !paused;
-      stopCar();
-      isDriving = false;
-      Serial.println("key p was pressed, which pauses/unpauses the program");
-    }
-  }
-
-    driving();
-  // static int count;
-  // static int countStraight;
-  // if (count < 6){  
-  //   count ++;
-  // } else { //runs once after void loop() runs 7 times. void loop runs about every 2.8ms, so this else condition runs every 19.6ms or 50 times/second
-  //   count = 0;
-  //   if (!paused){
-  //     if (isDriving != prevIsDriving){
-  //         leftSpeedVal = equilibriumSpeed;
-  //         countStraight = 0;
-  //         Serial.print("mode changed, isDriving: ");
-  //         Serial.println(isDriving);
-  //     }
-  //     if (isDriving) {
-  //       if (abs(targetAngle - angle) < 3){
-  //         if (countStraight < 20){
-  //           countStraight ++;
-  //         } else {
-  //           countStraight = 0;
-  //           equilibriumSpeed = leftSpeedVal; //to find equilibrium speed, 20 consecutive readings need to indicate car is going straight
-  //           Serial.print("EQUILIBRIUM reached, equilibriumSpeed: ");
-  //           Serial.println(equilibriumSpeed);
-  //         }
-  //       } else {
-  //         countStraight = 0;
-  //       }
-  //       driving();
-  //     } else {
-  //       rotate();
-  //     }
-  //     prevIsDriving = isDriving;
-  //   }
-  // }
 }
 
 
@@ -255,72 +133,8 @@ long pid_t0  =0;
   double angle_yaw_output = 0;
 
 void driving (){//called by void loop(), which isDriving = true
-  long now = millis();
-
-  int deltaAngle = round(targetAngle - angle); //rounding is neccessary, since you never get exact values in reality
-
-  angle_yaw_output = angle_yaw_output * 0.9 + angle * 0.1; 
-
-  //PID::
-  double pid_error = targetAngle - angle_yaw_output;// proportional
- //if(abs(angle) > 3) {
-    pid_integral = pid_integral + pid_error; //integral
-    double pid_derivative = pid_error - pid_last_error; //derivative
-    double adjust_angle_speed = (pid_error * Kp) + (pid_integral * Ki) + (pid_derivative * Kd);
-
-    adjust_angle_speed = min(adjust_angle_speed, maxSpeed);
-    adjust_angle_speed = max(adjust_angle_speed, minSpeed);
-    pid_last_error = pid_error;
-
-    if(( now - pid_t0) > 5000) {
-      pid_t0 = now;
-      Serial.print("PID speed adust ");
-      Serial.print(deltaAngle);Serial.print("/");
-      Serial.print(angle_yaw_output);Serial.print("/");
-      Serial.print(pid_error); Serial.print("/");
-      Serial.println(adjust_angle_speed);
-    }
-
-    /* from PID:
-    UR->setSpeed(mtrSpd);
-    UL->setSpeed(mtrSpd);
-    UR->run(FORWARD);
-    UL->run(FORWARD);
-
-      // for our purplse adjust_angle_speed might be too big make sure to scale
-       
-    
-    //setting the steering command if it is veering to the right
-    if(angle_pitch_output > 0){
-    UL->setSpeed(mtrSpd-abs(adjust_angle_speed));
-    UR->setSpeed(mtrSpd+abs(adjust_angle_speed));
-    UR->run(FORWARD);
-    UL->run(FORWARD);
-    
-    
-    }
-    
-    else if(angle_pitch_output < 0){ //setting the steering command if it is veering to the left
-      UL->setSpeed(mtrSpd+abs(adjust_angle_speed));
-    UR->setSpeed(mtrSpd-abs(adjust_angle_speed));
-    UR->run(FORWARD);
-    UL->run(FORWARD);
-    }
-
-    
-    */
- // } else {
-  //  pid_integral = 0;
-  //}
-
-
-  if(forward_direction) {forward(); } else { backward(); }
- // if (deltaAngle != 0){
-    controlSpeed (pid_error, adjust_angle_speed);
-    //rightSpeedVal = maxSpeed;
     analogWrite(rightSpeed, rightSpeedVal);
     analogWrite(leftSpeed, leftSpeedVal);
-  //}
 }
 
 void controlSpeed (int pid_error, int adjust_angle_speed){//this function is called by driving () --error = trarget-angle  -ive counter
