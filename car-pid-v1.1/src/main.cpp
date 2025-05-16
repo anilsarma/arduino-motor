@@ -14,7 +14,7 @@
 #include <IRremote.hpp>
 int IR_RECEIVE_PIN = 7;  
 #endif
-
+#include<avr/wdt.h>
 //control pins for left and right motors
 const int leftSpeed = 9; //means pin 9 on the Arduino controls the speed of left motor
 const int rightSpeed = 10;
@@ -27,9 +27,9 @@ const int right2 = 4;
 const int MPU = 0x68; // MPU6050 I2C address
 float AccX, AccY, AccZ; //linear acceleration
 float GyroX, GyroY, GyroZ; //angular velocity
-float accAngleX, accAngleY, gyroAngleX, gyroAngleY, gyroAngleZ; //used in void loop()
+float accAngleX, accAngleY, accAngleZ, gyroAngleX, gyroAngleY, gyroAngleZ; //used in void loop()
 float roll, pitch, yaw;
-float AccErrorX, AccErrorY, GyroErrorX, GyroErrorY, GyroErrorZ;
+float AccErrorX, AccErrorY, AccErrorZ, GyroErrorX, GyroErrorY, GyroErrorZ;
 float elapsedTime, currentTime, previousTime;
 int c = 0;
 
@@ -81,6 +81,10 @@ void setup() {
   currentTime = micros();
 
   stopCar();
+   wdt_disable();  /* Disable the watchdog and wait for more than 2 seconds */
+  delay(3000);  /* Done so that the Arduino doesn't keep resetting infinitely in case of wrong configuration */
+  wdt_enable(WDTO_2S);  /* Enable the watchdog with a timeout of 2 seconds */
+
 
 }
 #ifdef IR_SUPPORT
@@ -98,25 +102,35 @@ long t0_direction = millis();
 long t0 = millis();
 double pid_integral = 0;
 
-void loop() {
 
+ISR(WDT_vect)
+{
+    Serial.println("Watchdog Interrupt - Restarting");
+    // you can include any code here. With the reset disabled you could perform an action here every time
+    // the watchdog times out...
+}
+
+
+void loop() {
+wdt_reset(); 
   long now = millis();
 
   if( (now - t0_direction) > 3000) {
-     forward_direction = !forward_direction;
+     //forward_direction = !forward_direction;
      t0_direction = now;
-     targetAngle += 180;
+     //targetAngle += 180;
      if(targetAngle > 360) {
       targetAngle = 0;
      }
-     pid_integral = 0; // start over.
+    // pid_integral = 0; // start over.
      stopCar();
      Serial.print("switching direction: ");Serial.println(forward_direction);
      delay(1000);
-     leftSpeedVal = 200;
-     rightSpeedVal = 200;
+     //leftSpeedVal = 120;
+     //rightSpeedVal = 120;
+     t0 = 0;
   }
-  if(( now - t0) > 5000) {
+  if(( now - t0) > 500) {
     //Serial.print("in loop ");
     //wSerial.println(now);
     t0 = now;
@@ -141,6 +155,7 @@ void loop() {
   // Calculating Roll and Pitch from the accelerometer data
   accAngleX = (atan(AccY / sqrt(pow(AccX, 2) + pow(AccZ, 2))) * 180 / PI) - AccErrorX; //AccErrorX is calculated in the calculateError() function
   accAngleY = (atan(-1 * AccX / sqrt(pow(AccY, 2) + pow(AccZ, 2))) * 180 / PI) - AccErrorY;
+  accAngleZ = (atan(AccY / sqrt(pow(AccX, 2) + pow(AccY, 2))) * 180 / PI) - AccErrorZ; //AccErrorX is calculated in the calculateError() function
   
   // === Read gyroscope (on the MPU6050) data === //
   previousTime = currentTime;
@@ -159,7 +174,7 @@ void loop() {
   roll = 0.96 * gyroAngleX + 0.04 * accAngleX;
   pitch = 0.96 * gyroAngleY + 0.04 * accAngleY;
   // do a roll/pitch/yaw test.
-  angle = yaw; //if you mounted MPU6050 in a different orientation to me, angle may not = roll. It can roll, pitch, yaw or minus version of the three
+  angle =  yaw; //  0.96 * yaw + 0.04 * accAngleZ;; //if you mounted MPU6050 in a different orientation to me, angle may not = roll. It can roll, pitch, yaw or minus version of the three
   //for me, turning right reduces angle. Turning left increases angle.
 #ifdef IR_SUPPORT
     ir_loop();
@@ -248,37 +263,58 @@ void loop() {
 double pid_last_error = 0;
 
 //the 'k' values are the ones you need to fine tune before your program will work. Note that these are arbitrary values that you just need to experiment with one at a time.
+
+
+// Works straight but slow to getback to line.
+//double Kp = 3;
+//double Ki = 0.025;
+//double Kd = 3;
+
 double Kp = 11;
 double Ki = 0.09;
 double Kd = 10;
+
+
 long pid_t0  =0;
-  double angle_yaw_output = 0;
+double angle_yaw_output = 0;
 
 void driving (){//called by void loop(), which isDriving = true
   long now = millis();
 
-  int deltaAngle = round(targetAngle - angle); //rounding is neccessary, since you never get exact values in reality
+  //int deltaAngle = round(targetAngle - angle); //rounding is neccessary, since you never get exact values in reality
 
-  angle_yaw_output = angle_yaw_output * 0.9 + angle * 0.1; 
+  angle_yaw_output = angle; //  angle_yaw_output * 0.9 + angle * 0.1; 
 
   //PID::
-  double pid_error = targetAngle - angle_yaw_output;// proportional
+  double pid_error = round(targetAngle - angle_yaw_output);// proportional
+  double deltaAngle = pid_error; // same thing.
  //if(abs(angle) > 3) {
-    pid_integral = pid_integral + pid_error; //integral
-    double pid_derivative = pid_error - pid_last_error; //derivative
-    double adjust_angle_speed = (pid_error * Kp) + (pid_integral * Ki) + (pid_derivative * Kd);
 
-    adjust_angle_speed = min(adjust_angle_speed, maxSpeed);
-    adjust_angle_speed = max(adjust_angle_speed, minSpeed);
+    if(pid_error ==0) {
+        pid_integral = 0;
+      //pid_last_error = 0;
+
+    } else {
+      pid_integral = pid_integral + pid_error; //integral
+    }
+    double pid_derivative = pid_error - pid_last_error; //derivative
+    double adjust_angle_speed = 1 * ((pid_error * Kp) + (pid_integral * Ki) + (pid_derivative * Kd));
+
+    //adjust_angle_speed = min(adjust_angle_speed, maxSpeed);
+    //adjust_angle_speed = max(adjust_angle_speed, minSpeed);
     pid_last_error = pid_error;
 
-    if(( now - pid_t0) > 5000) {
+    //if(( now - pid_t0) > 5000) 
+    {
       pid_t0 = now;
       Serial.print("PID speed adust ");
       Serial.print(deltaAngle);Serial.print("/");
       Serial.print(angle_yaw_output);Serial.print("/");
       Serial.print(pid_error); Serial.print("/");
-      Serial.println(adjust_angle_speed);
+      Serial.print(adjust_angle_speed);
+      Serial.print("-------------------");
+      Serial.print(leftSpeedVal);Serial.print("/");Serial.print(rightSpeedVal);
+      Serial.println("");
     }
 
     /* from PID:
@@ -321,9 +357,24 @@ void driving (){//called by void loop(), which isDriving = true
     analogWrite(rightSpeed, rightSpeedVal);
     analogWrite(leftSpeed, leftSpeedVal);
   //}
+  delay(10);
 }
 
 void controlSpeed (int pid_error, int adjust_angle_speed){//this function is called by driving () --error = trarget-angle  -ive counter
+  if(!forward_direction) {
+    adjust_angle_speed = -adjust_angle_speed;
+  }
+     leftSpeedVal  +=  (adjust_angle_speed);
+     rightSpeedVal -=  (adjust_angle_speed);
+
+
+     leftSpeedVal = max( leftSpeedVal, 120);
+     rightSpeedVal = max( rightSpeedVal, 120);
+
+    leftSpeedVal = min( leftSpeedVal, 255);
+     rightSpeedVal = min( rightSpeedVal,255);
+     return;
+
    if(abs(pid_error)< 1){
       return; // as is
    }
@@ -421,11 +472,14 @@ void calculateError() {
     // Sum all readings
     AccErrorX += (atan((AccY) / sqrt(pow((AccX), 2) + pow((AccZ), 2))) * 180 / PI);
     AccErrorY += (atan(-1 * (AccX) / sqrt(pow((AccY), 2) + pow((AccZ), 2))) * 180 / PI);
+    AccErrorZ += (atan((AccX) / sqrt(pow((AccY), 2) + pow((AccY), 2))) * 180 / PI);
+    
     c++;
   }
   //Divide the sum by 200 to get the error value, since expected value of reading is zero
   AccErrorX = AccErrorX / 200;
   AccErrorY = AccErrorY / 200;
+  AccErrorZ = AccErrorZ / 200;
   c = 0;
   
   // Read gyro values 200 times
